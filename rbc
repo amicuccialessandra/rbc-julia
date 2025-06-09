@@ -1,0 +1,86 @@
+#Useful packages 
+using ModelingToolkit         # Modelli simbolici dinamici
+using DifferentialEquations   # Risoluzione EDO
+using Symbolics               # Algebra simbolica
+using ForwardDiff             # Derivazione automatica
+using NLsolve                 # Soluzione di sistemi non lineari (steady state)
+using Optim                   # Ottimizzazione
+using Turing                  # Stima bayesiana
+using Distributions           # Distribuzioni per MCMC
+using Plots                   # Grafici (IRF, simulazioni)
+
+#useful commands 
+pwd()                  # mostra cartella corrente
+cd("Desktop")          # cambia cartella
+include("file.jl")     # esegue uno script
+@time expr             # misura il tempo
+@show x                # stampa x con nome
+
+#grafs
+plot(sol.t, sol[k], label="Capitale", xlabel="Tempo", ylabel="k(t)")
+
+#defining model 
+@parameters t
+@variables k(t), y(t), c(t)
+@parameters α=0.36 δ=0.05 s=0.25
+
+eqs = [
+    y ~ k^α,
+    Differential(t)(k) ~ s*y - δ*k
+]
+
+@named model = ODESystem(eqs)
+
+#steady state calculos 
+using NLsolve
+
+function steady(vars)
+    k = vars[1]
+    y = k^0.36
+    dk = 0.25 * y - 0.05 * k
+    return [dk]
+end
+
+sol = nlsolve(steady, [1.0])
+println("k* =", sol.zero[1])
+
+#dynamics simulations
+using DifferentialEquations
+
+@named sys = ODESystem(eqs)
+prob = ODEProblem(sys, [k => 1.0], (0.0, 100.0), [])
+sol = solve(prob)
+
+plot(sol, vars=[k, y])
+
+#IRF 
+# Shock iniziale
+prob_shock = remake(prob; u0=[k => 1.2])  # shock 20% su capitale
+sol_shock = solve(prob_shock)
+
+plot(sol, sol_shock, vars=[k], labels=["baseline" "shock"])
+
+#Bayesian estimation
+using Turing
+
+@model function bayes_model(data)
+    α ~ Normal(0.36, 0.1)
+    δ ~ Normal(0.05, 0.01)
+    σ ~ Truncated(Cauchy(0, 1), 0.0, Inf)
+
+    for i in 2:length(data)
+        k_prev = data[i-1]
+        k_curr ~ Normal(k_prev + 0.25*(k_prev^α) - δ*k_prev, σ)
+    end
+end
+
+data = [1.0, 1.02, 1.05, 1.08]  # dati simulati
+chain = sample(bayes_model(data), NUTS(), 1000)
+
+#save
+using CSV, DataFrames
+
+df = DataFrame(time = sol.t, k = sol[k], y = sol[y])
+CSV.write("simulazione.csv", df)
+
+df2 = CSV.read("simulazione.csv", DataFrame)
